@@ -7,7 +7,7 @@ import jieba
 PAD_token = 0  # Used for padding short sentences
 SOS_token = 1  # Start-of-sentence token
 EOS_token = 2  # End-of-sentence token
-jieba.load_userdict("../../wordBase.txt")
+jieba.load_userdict("../wordBase.txt")
 
 
 class Voc:
@@ -95,3 +95,14 @@ def binaryMatrix(l, value=PAD_token):
 
 def sentenceToWordList(sentence):
     return list(jieba.cut(sentence))
+
+def writeFile(filepath, content):
+    output = open(filepath, 'w', encoding='UTF-8')
+    output.write(content)
+    output.close()
+
+
+def writeFile_Add(filepath, content):
+    output = open(filepath, 'a', encoding='utf-8')
+    output.write(content)
+    output.close()
