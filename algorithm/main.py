@@ -5,13 +5,17 @@ import myUtil
 from algorithm.Attn_GRU.Model import Attn
 from algorithm.Attn_GRU.Model import AttnGRU
 from algorithm.LSTM.Model import LSTM
+from algorithm.RE.Model import RE
+from algorithm.CNN.Model import CNN
 from myUtil import Voc
 import matplotlib.pyplot as plt
+import random
 
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
 
 data_path = "../data/generatedBySystem.txt"
+
 
 def getPairs(lines):
     pairs = []
@@ -61,7 +65,7 @@ def batchToTrainData(voc, pair_batch):
 
     for pair in pair_batch:
         try:
-            if int(pair[3]) == 0: continue
+            if int(pair[3]) <= 0 or int(pair[3]) > 9: continue
             sentence_batch.append(pair[0])
             entity1_batch.append(pair[1])
             entity2_batch.append(pair[2])
@@ -115,6 +119,7 @@ def train(padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_ba
 
 
 def test(testing_batches, model, loss_func):
+    # 用于测试，关闭梯度
     with torch.no_grad():
         total_correct = 0
         total_count = 0
@@ -170,6 +175,8 @@ def draw(train, test, title):
 
 def trainIters(epoch, batch_size, voc, trainPairs, testPairs, model, optimizer, loss_func):
     batch_number = int(len(trainPairs) / batch_size)
+    train_number = len(trainPairs)
+    test_number = len(testPairs)
     # 随机打乱trainPairs
     np.random.shuffle(trainPairs)
 
@@ -213,36 +220,40 @@ def trainIters(epoch, batch_size, voc, trainPairs, testPairs, model, optimizer, 
                                                                correct_total.cpu().data.numpy().item() / total_count))
         test_loss, test_accuracy = test(testing_batches, model, loss_func)
 
-        train_losses.append(train_loss.cpu().data.numpy().item())
+        train_losses.append(train_loss.cpu().data.numpy().item() / train_number)
         train_accuracies.append(correct_total.cpu().data.numpy().item() / total_count)
-        test_losses.append(test_loss)
+        test_losses.append(test_loss / test_number)
         test_accuracies.append(test_accuracy)
 
-    draw(train_losses, test_losses, "loss")
-    draw(train_accuracies, test_accuracies, "accuracy")
+    # draw(train_losses, test_losses, "loss")
+    # draw(train_accuracies, test_accuracies, "accuracy")
     return train_losses, test_losses, train_accuracies, test_accuracies
 
 
 # 保存中间结果，用来画图
-def save_result(train_losses, test_losses, train_accuracies, test_accuracies, save_name):
+def save_result(train_losses, test_losses, train_accuracies, test_accuracies, save_name, load_name):
     content = ""
     for tl in train_losses:
-        content += tl + " "
-    content[-1] = "\n"
+        content += str(tl) + " "
+    content += "\n"
 
     for tl in test_losses:
-        content += tl + " "
-    content[-1] = "\n"
+        content += str(tl) + " "
+    content += "\n"
 
     for ta in train_accuracies:
-        content += ta + " "
-    content[-1] = "\n"
+        content += str(ta) + " "
+    content += "\n"
 
     for ta in test_accuracies:
-        content += ta + " "
-    content[-1] = "\n"
+        content += str(ta) + " "
+    content += "\n"
 
-    myUtil.writeFile_Add("../data/result/" + save_name, content)
+    # 更加model_name是否为None来判断是否追加结果
+    if load_name is None:
+        myUtil.writeFile("../data/result/" + save_name + ".result", content)
+    else:
+        myUtil.writeFile_Add("../data/result/" + save_name + ".result", content)
     print("中间结果已保存!")
 
 
@@ -255,6 +266,12 @@ def get_model(model_name, hidden_size, out_size, voc):
 
     if model_name == "LSTM":
         model = LSTM(hidden_size, out_size, voc, n_layers=2, dropout=0.5).to(device)
+
+    if model_name == "RE":
+        model = RE(hidden_size, out_size, voc, dropout=0.5).to(device)
+
+    if model_name == "CNN":
+        model = CNN(hidden_size, out_size, voc, dropout=0.5).to(device)
     return model
 
 
@@ -262,12 +279,17 @@ def get_model(model_name, hidden_size, out_size, voc):
 def main(save_name, load_name=None, model_name="Attn_GRU"):
     print("加载数据......")
     pairs, voc = loadPrepareData()
-    trainPairs = pairs[:-100]
-    testPairs = pairs[-100:]
+
+    # 随机采样测试集
+    sampleNumber = 400
+    testBegin = random.randint(0, len(pairs) - sampleNumber)
+    trainPairs = pairs[:testBegin] + pairs[testBegin + sampleNumber:]
+    testPairs = pairs[testBegin:testBegin + sampleNumber]
+
     print("测试集数量{},训练集数量{}".format(len(trainPairs), len(testPairs)))
 
     print("初始化模型......")
-    hidden_size = 32
+    hidden_size = 64
     out_size = 9
     epoch = 1000
     batch_size = 64
@@ -282,20 +304,22 @@ def main(save_name, load_name=None, model_name="Attn_GRU"):
     # 设置optimizer与loss_func
     optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
     # optimizer = torch.optim.Adam(model.parameters())
+    # optimizer = torch.optim.Adagrad(model.parameters())
     loss_func = torch.nn.CrossEntropyLoss().to(device)
 
     # 开始训练
     try:
         train_losses, test_losses, train_accuracies, test_accuracies = \
             trainIters(epoch, batch_size, voc, trainPairs, testPairs, model, optimizer, loss_func)
-        save_result(train_losses, test_losses, train_accuracies, test_accuracies, save_name)
+        save_result(train_losses, test_losses, train_accuracies, test_accuracies, save_name, load_name)
     finally:
         torch.save(model, '../data/model/{}.pkl'.format(save_name))
         print("模型保存成功!")
 
 
 if __name__ == "__main__":
-    data_path = "../data/labeled_sentence.txt"
-    # Attn_GRU  LSTM
+    # generatedBySystem
+    data_path = "../data/generatedBySystem.txt"
+    # Attn_GRU  LSTM CNN RE
     # Attn_GRU_hid32
-    main("Attn_GRU_1000", model_name="Attn_GRU")
+    main("RE_gsb", model_name="RE")

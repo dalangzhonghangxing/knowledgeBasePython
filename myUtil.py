@@ -2,6 +2,8 @@ import unicodedata
 import re
 import itertools
 import jieba
+from gensim.models import Word2Vec
+import os
 
 # Default word tokens
 PAD_token = 0  # Used for padding short sentences
@@ -10,6 +12,7 @@ EOS_token = 2  # End-of-sentence token
 jieba.load_userdict("../wordBase.txt")
 
 
+# 用于记录单词表
 class Voc:
     def __init__(self, name):
         self.name = name
@@ -58,6 +61,20 @@ class Voc:
             self.addWord(word)
 
 
+# 将文件按行读入到list中，为了训练word2vec
+class Sentences(object):
+    def __init__(self, dirname):
+        self.dirname = dirname
+        jieba.load_userdict("wordBase.txt")
+
+    def __iter__(self):
+        for fname in os.listdir(self.dirname):
+            for line in open(os.path.join(self.dirname, fname)):
+                line = normalizeString(line)
+                if line != "":
+                    yield list(jieba.cut(line))
+
+
 def unicodeToAscii(s):
     return ''.join(
         c for c in unicodedata.normalize('NFD', s)
@@ -65,11 +82,25 @@ def unicodeToAscii(s):
     )
 
 
+# 标准化处理
 def normalizeString(s):
-    s = unicodeToAscii(s.lower().strip())
-    s = re.sub(r"([.!?])", r" \1", s)
-    s = re.sub(r"[^a-zA-Z.!?]+", r" ", s)
-    s = re.sub(r"\s+", r" ", s).strip()
+    s = s.strip()
+    if "《" in s or "年" in s or "∵" in s or "∴" in s or len(s) < 6:
+        return ""
+    s.replace("（", "(")
+    s.replace("）", ")")
+    s.replace("，", ",")
+    s.replace(".", "。")
+    s.replace("；", ";")
+    s.replace("：", ":")
+    s.replace("①", "1、")
+    s.replace("②", "2、")
+    s.replace("③", "3、")
+    s.replace("④", "4、")
+    s.replace("°", "度")
+    s.replace("．", "、")
+    s.replace("√", "根号")
+    s.replace("²", "^2")
     return s
 
 
@@ -96,6 +127,7 @@ def binaryMatrix(l, value=PAD_token):
 def sentenceToWordList(sentence):
     return list(jieba.cut(sentence))
 
+
 def writeFile(filepath, content):
     output = open(filepath, 'w', encoding='UTF-8')
     output.write(content)
@@ -106,3 +138,10 @@ def writeFile_Add(filepath, content):
     output = open(filepath, 'a', encoding='utf-8')
     output.write(content)
     output.close()
+
+
+# 根据语料所在文件夹，训练词向量
+def train_word2vec(folder_path, size=100):
+    sentences = Sentences(folder_path)
+    model = Word2Vec(sentences, size=size, workers=8, min_count=0)
+    model.save("one_hop_model.txt")

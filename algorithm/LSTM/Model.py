@@ -17,7 +17,7 @@ class LSTM(nn.Module):
 
         self.embedding = torch.nn.Embedding(voc.num_words, hidden_size)
         self.num_layer = n_layers
-        self.hidden_size = hidden_size
+        self.lstm_hidden_size = 20
 
         self.lstm = nn.LSTM(
             input_size=hidden_size,
@@ -52,8 +52,8 @@ class LSTM(nn.Module):
         outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
 
         # 将双向向量求和
-        outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]
+        outputs = outputs[:, :, :self.lstm_hidden_size] + outputs[:, :, self.lstm_hidden_size:]
 
         out = self.out(torch.cat((outputs[:, -1, :], embedded_relation.squeeze(1)), dim=1))
-
+        # out = self.out(outputs[:, -1, :])
         return out
