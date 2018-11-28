@@ -17,11 +17,11 @@ class LSTM(nn.Module):
 
         self.embedding = torch.nn.Embedding(voc.num_words, hidden_size)
         self.num_layer = n_layers
-        self.lstm_hidden_size = 20
+        self.lstm_hidden_size = hidden_size
 
         self.lstm = nn.LSTM(
             input_size=hidden_size,
-            hidden_size=hidden_size,
+            hidden_size=self.lstm_hidden_size,
             num_layers=n_layers,
             batch_first=True,
             dropout=dropout,
@@ -33,7 +33,8 @@ class LSTM(nn.Module):
             nn.Linear(hidden_size * 2, out_size)
         )
 
-    def forward(self, sentences_seq, sentence_lengths, entity1_index, entity2_index, hidden=None):
+    def forward(self, sentences_seq, sentence_lengths, entity1_index, entity2_index, position_to_entity1_batch,
+                position_to_entity2_batch, hidden=None):
         # 将index转换为embedding
         # sentences_seq是length*batch的，所以要先进性转置
         embedded_sentence = self.embedding(sentences_seq.t())

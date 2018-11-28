@@ -20,7 +20,8 @@ class RE(nn.Module):
             nn.Linear(hidden_size, out_size)
         )
 
-    def forward(self, sentences_seq, sentence_lengths, entity1_index, entity2_index, hidden=None):
+    def forward(self, sentences_seq, sentence_lengths, entity1_index, entity2_index, position_to_entity1_batch,
+                position_to_entity2_batch, hidden=None):
         embedded_entity1 = self.embedding(entity1_index)
         embedded_entity2 = self.embedding(entity2_index)
 

@@ -65,7 +65,6 @@ class Voc:
 class Sentences(object):
     def __init__(self, dirname):
         self.dirname = dirname
-        jieba.load_userdict("wordBase.txt")
 
     def __iter__(self):
         for fname in os.listdir(self.dirname):
@@ -108,6 +107,51 @@ def indexesFromSentence(voc, word_list):
     return [voc.word2index[word] for word in word_list] + [EOS_token]
 
 
+def positionsFromSentence(sentence, word_index):
+    ans = []
+    for i, index in enumerate(sentence):
+        if word_index == index:
+            ans.append(i)
+    return ans
+
+
+def positionToEntity(sentence_indexes_batch, entity1_indexes_batch, entity2_indexes_batch):
+    positon_to_entity1_batch = []
+    positon_to_entity2_batch = []
+    for index in range(len(sentence_indexes_batch)):
+        sentence = sentence_indexes_batch[index]
+        entity1 = entity1_indexes_batch[index]
+        entity2 = entity2_indexes_batch[index]
+
+        entity1_potisions = positionsFromSentence(sentence, entity1)
+        entity2_potisions = positionsFromSentence(sentence, entity2)
+
+        positon_to_entity1 = []
+        positon_to_entity2 = []
+        for i in range(len(sentence)):
+            positon_to_entity1.append(closePosition(entity1_potisions, i))
+            positon_to_entity2.append(closePosition(entity2_potisions, i))
+        positon_to_entity1_batch.append(positon_to_entity1)
+        positon_to_entity2_batch.append(positon_to_entity2)
+    return positon_to_entity1_batch, positon_to_entity2_batch
+
+
+def closePosition(entity_positions, index):
+    '''
+    获取到最近的指定entity的距离，距离为有向距离。为了保证relative_position为正，最后加上一个常数来将负距离变为正数
+    :param entity_potisions: 指定entity在sentence中的position list
+    :param index: 当前单词在sentence中的index
+    :return:
+    '''
+    _abs = 100000
+    relative_position = 0
+    for position in entity_positions:
+        if abs(index - position) < _abs:
+            _abs = abs(index - position)
+            relative_position = index - position
+    return relative_position + 300
+
+
 def zeroPadding(l, fillvalue=PAD_token):
     return list(itertools.zip_longest(*l, fillvalue=fillvalue))
 
@@ -117,7 +161,7 @@ def binaryMatrix(l, value=PAD_token):
     for i, seq in enumerate(l):
         m.append([])
         for token in seq:
-            if token == PAD_token:
+            if token == value:
                 m[i].append(0)
             else:
                 m[i].append(1)
@@ -141,7 +185,7 @@ def writeFile_Add(filepath, content):
 
 
 # 根据语料所在文件夹，训练词向量
-def train_word2vec(folder_path, size=100):
+def train_word2vec(folder_path, save_path, size=100):
     sentences = Sentences(folder_path)
     model = Word2Vec(sentences, size=size, workers=8, min_count=0)
-    model.save("one_hop_model.txt")
+    model.save(save_path)

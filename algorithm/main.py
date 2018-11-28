@@ -2,19 +2,21 @@ import numpy as np
 import torch
 
 import myUtil
-from algorithm.Attn_GRU.Model import Attn
 from algorithm.Attn_GRU.Model import AttnGRU
 from algorithm.LSTM.Model import LSTM
 from algorithm.RE.Model import RE
 from algorithm.CNN.Model import CNN
+from algorithm.CNN.Model import CNNRE
+from algorithm.Attn_CNN.Model import Attn_CNN
+from algorithm.Transformer.Model import Transformer
+from algorithm.Optimizer import NoamOpt
 from myUtil import Voc
 import matplotlib.pyplot as plt
-import random
 
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
 
-data_path = "../data/generatedBySystem.txt"
+data_path = "../data/generatedBySystem_final.txt"
 
 
 def getPairs(lines):
@@ -48,11 +50,16 @@ def inputVar(sentence_batch, entity1_batch, entity2_batch, tag_batch, voc):
 
     entity1_indexes_batch = [voc.word2index[entity] for entity in entity1_batch]
     entity2_indexes_batch = [voc.word2index[entity] for entity in entity2_batch]
+    positon_to_entity1_batch, positon_to_entity2_batch = myUtil.positionToEntity(sentence_indexes_batch,
+                                                                                 entity1_indexes_batch,
+                                                                                 entity2_indexes_batch)
     padList = torch.LongTensor(padList)
     entity1_indexes_batch = torch.LongTensor(entity1_indexes_batch)
     entity2_indexes_batch = torch.LongTensor(entity2_indexes_batch)
     tag_batch = torch.LongTensor(tag_batch)
-    return padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch
+    positon_to_entity1_batch = torch.LongTensor(myUtil.zeroPadding(positon_to_entity1_batch, fillvalue=0))
+    positon_to_entity2_batch = torch.LongTensor(myUtil.zeroPadding(positon_to_entity2_batch, fillvalue=0))
+    return padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch, positon_to_entity1_batch, positon_to_entity2_batch
 
 
 # 将一个batch转换成训练数据
@@ -76,7 +83,8 @@ def batchToTrainData(voc, pair_batch):
     return inputVar(sentence_batch, entity1_batch, entity2_batch, tag_batch, voc)
 
 
-def train(padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch, model,
+def train(padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch, positon_to_entity1_batch,
+          positon_to_entity2_batch, model,
           optimizer, loss_func):
     '''
     训练一个batch
@@ -98,10 +106,13 @@ def train(padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_ba
     entity1_indexes_batch = entity1_indexes_batch.to(device)
     entity2_indexes_batch = entity2_indexes_batch.to(device)
     tag_batch = tag_batch.to(device)
+    positon_to_entity1_batch = positon_to_entity1_batch.to(device)
+    positon_to_entity2_batch = positon_to_entity2_batch.to(device)
 
     # 计算结果
     out = model(
-        padList, lengths, entity1_indexes_batch, entity2_indexes_batch
+        padList, lengths, entity1_indexes_batch, entity2_indexes_batch, positon_to_entity1_batch,
+        positon_to_entity2_batch
     )
 
     # 计算loss
@@ -119,13 +130,15 @@ def train(padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_ba
 
 
 def test(testing_batches, model, loss_func):
+    model.eval()
     # 用于测试，关闭梯度
     with torch.no_grad():
         total_correct = 0
         total_count = 0
         total_loss = 0
         for test_batch in testing_batches:
-            padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch = test_batch
+            padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch, \
+            position_to_entity1_batch, position_to_entity2_batch = test_batch
 
             # 将相关变量放入 device中
             padList = padList.to(device)
@@ -133,11 +146,13 @@ def test(testing_batches, model, loss_func):
             entity1_indexes_batch = entity1_indexes_batch.to(device)
             entity2_indexes_batch = entity2_indexes_batch.to(device)
             tag_batch = tag_batch.to(device)
+            position_to_entity1_batch = position_to_entity1_batch.to(device)
+            position_to_entity2_batch = position_to_entity2_batch.to(device)
 
             # 计算结果
-            model.eval()
             out = model(
-                padList, lengths, entity1_indexes_batch, entity2_indexes_batch
+                padList, lengths, entity1_indexes_batch, entity2_indexes_batch, position_to_entity1_batch,
+                position_to_entity2_batch
             )
 
             # 计算loss
@@ -184,14 +199,16 @@ def trainIters(epoch, batch_size, voc, trainPairs, testPairs, model, optimizer, 
     training_batches = []
     for i in range(batch_number):
         training_batches.append(batchToTrainData(voc, trainPairs[i * batch_size:i * batch_size + batch_size]))
-    training_batches.append(batchToTrainData(voc, trainPairs[batch_number * batch_size:len(trainPairs)]))
+    if batch_number * batch_size < len(trainPairs):
+        training_batches.append(batchToTrainData(voc, trainPairs[batch_number * batch_size:len(trainPairs)]))
 
     # 生成testing_batches
     testing_batches = []
     for i in range(int(len(testPairs) / batch_size)):
         testing_batches.append(batchToTrainData(voc, testPairs[i * batch_size:i * batch_size + batch_size]))
-    testing_batches.append(
-        batchToTrainData(voc, testPairs[int(len(testPairs) / batch_size) * batch_size:len(testPairs)]))
+    if int(len(testPairs) / batch_size) * batch_size < len(testPairs):
+        testing_batches.append(
+            batchToTrainData(voc, testPairs[int(len(testPairs) / batch_size) * batch_size:len(testPairs)]))
 
     train_losses = []
     test_losses = []
@@ -206,9 +223,10 @@ def trainIters(epoch, batch_size, voc, trainPairs, testPairs, model, optimizer, 
 
         # 依次训练所有batch
         for train_batch in training_batches:
-            padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch = train_batch
+            padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch, positon_to_entity1_batch, positon_to_entity2_batch = train_batch
 
-            loss, correct = train(padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch, model,
+            loss, correct = train(padList, lengths, entity1_indexes_batch, entity2_indexes_batch, tag_batch,
+                                  positon_to_entity1_batch, positon_to_entity2_batch, model,
                                   optimizer, loss_func)
 
             train_loss += loss
@@ -260,9 +278,7 @@ def save_result(train_losses, test_losses, train_accuracies, test_accuracies, sa
 # 根据模型名称，获取模型
 def get_model(model_name, hidden_size, out_size, voc):
     if model_name == "Attn_GRU":
-        # concat general dot
-        attn = Attn("general", hidden_size).to(device)
-        model = AttnGRU(attn, hidden_size, out_size, voc, n_layers=1, dropout=0.5).to(device)
+        model = AttnGRU(hidden_size, out_size, voc, device, n_layers=1, dropout=0).to(device)
 
     if model_name == "LSTM":
         model = LSTM(hidden_size, out_size, voc, n_layers=2, dropout=0.5).to(device)
@@ -271,8 +287,53 @@ def get_model(model_name, hidden_size, out_size, voc):
         model = RE(hidden_size, out_size, voc, dropout=0.5).to(device)
 
     if model_name == "CNN":
-        model = CNN(hidden_size, out_size, voc, dropout=0.5).to(device)
+        model = CNN(hidden_size, out_size, voc).to(device)
+
+    if model_name == "CNNRE":
+        model = CNNRE(hidden_size, out_size, voc).to(device)
+
+    if model_name == "Attn_CNN":
+        model = Attn_CNN(hidden_size, out_size, voc).to(device)
+
+    if model_name == "Transformer":
+        model = Transformer(hidden_size, out_size, voc).to(device)
+
+    # 初始化网络参数
+    for p in model.parameters():
+        if p.dim() > 1:
+            torch.nn.init.xavier_uniform_(p)
     return model
+
+
+def sample(pairs, ratio, random=False):
+    '''
+    进行同分布采样。按照每个类别所占的比率进行采样。
+    :param pairs: 数据集总数
+    :param ratio: 测试集总数
+    :param random: 是否随机采样。默认为False，即采样最后几个。开启则随机采样。
+    :return:
+    '''
+    map = {"1": [], "2": [], "3": [], "4": [], "5": [], "6": [], "7": [], "8": [], "9": []}
+    for pair in pairs:
+        if pair[3] in map.keys():
+            map[pair[3]].append(pair)
+
+    trainPairs = []
+    testPairs = []
+
+    # 不是随机采样，
+    if random == False:
+        for key in map.keys():
+            trainPairs += map[key][:int(len(map[key]) * (1 - ratio))]
+            testPairs += map[key][int(len(map[key]) * (1 - ratio)):]
+    else:
+        for key in map.keys():
+            sampleNumber = int(len(map[key]) * ratio)
+            begin = random.randint(0, len(map[key]) - sampleNumber)
+            trainPairs += map[key][:begin] + map[key][begin + sampleNumber:]
+            testPairs += map[key][begin:begin + sampleNumber]
+
+    return trainPairs, testPairs
 
 
 # 主入口
@@ -281,19 +342,16 @@ def main(save_name, load_name=None, model_name="Attn_GRU"):
     pairs, voc = loadPrepareData()
 
     # 随机采样测试集
-    sampleNumber = 400
-    testBegin = random.randint(0, len(pairs) - sampleNumber)
-    trainPairs = pairs[:testBegin] + pairs[testBegin + sampleNumber:]
-    testPairs = pairs[testBegin:testBegin + sampleNumber]
-
+    trainPairs, testPairs = sample(pairs, 0.1)
     print("测试集数量{},训练集数量{}".format(len(trainPairs), len(testPairs)))
 
     print("初始化模型......")
     hidden_size = 64
     out_size = 9
-    epoch = 1000
+    epoch = 150
     batch_size = 64
-    lr = 0.01
+    lr = 0.001
+    weight_decay = 3e-0
 
     # 设置当前的模型，加载参数
     model = get_model(model_name, hidden_size, out_size, voc)
@@ -302,9 +360,12 @@ def main(save_name, load_name=None, model_name="Attn_GRU"):
         print("模型加载成功!")
 
     # 设置optimizer与loss_func
-    optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
-    # optimizer = torch.optim.Adam(model.parameters())
-    # optimizer = torch.optim.Adagrad(model.parameters())
+    # optimizer = NoamOpt(hidden_size, 0.7, 800, torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.999),
+    #                                                             weight_decay=weight_decay))
+    # optimizer = torch.optim.Adam(model.parameters(), lr=1e-6, weight_decay=weight_decay)
+    # optimizer = torch.optim.RMSprop(model.parameters(), lr=1e-4, weight_decay=weight_decay)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-6, weight_decay=weight_decay)
+    # optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_func = torch.nn.CrossEntropyLoss().to(device)
 
     # 开始训练
@@ -312,14 +373,24 @@ def main(save_name, load_name=None, model_name="Attn_GRU"):
         train_losses, test_losses, train_accuracies, test_accuracies = \
             trainIters(epoch, batch_size, voc, trainPairs, testPairs, model, optimizer, loss_func)
         save_result(train_losses, test_losses, train_accuracies, test_accuracies, save_name, load_name)
-    finally:
         torch.save(model, '../data/model/{}.pkl'.format(save_name))
         print("模型保存成功!")
+    finally:
+        pass
+        # torch.save(model, '../data/model/{}.pkl'.format(save_name))
+        # print("模型保存成功!")
 
 
 if __name__ == "__main__":
-    # generatedBySystem
-    data_path = "../data/generatedBySystem.txt"
-    # Attn_GRU  LSTM CNN RE
-    # Attn_GRU_hid32
-    main("RE_gsb", model_name="RE")
+    # generatedBySystem_final
+    # labeled_sentence
+    # generatedBySystem_all
+    data_path = "../data/generatedBySystem_final.txt"
+    # Attn_GRU
+    # LSTM
+    # CNN
+    # RE
+    # Attn_CNN
+    # Transformer
+    # CNNRE
+    main("Transformer_gsb6", load_name="Transformer_gsb5", model_name="Transformer")
